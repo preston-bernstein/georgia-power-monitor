@@ -95,7 +95,13 @@ if ! run_sudo -u "${SERVICE_USER}" "${VENV_DIR}/bin/python" "${APP_DIR}/ops/pref
     echo "WARN: preflight reported a failure (see PASS/FAIL lines above) -- continuing deploy; re-run scripts/deploy.sh after fixing." >&2
 fi
 
-# 8. Enable + start the timer.
-run_sudo systemctl enable --now gp-monitor-poll.timer
+# 8. Enable + (re)start the timer. `restart`, not `enable --now`: this script is meant to be
+#    re-run on redeploys (see header comment), and an already-active timer does NOT reload its
+#    unit file on its own even after `daemon-reload` (step 6) -- only a restart reparses it. Using
+#    `enable --now` here was a real bug: a systemd/gp-monitor-poll.timer edit landed on disk and
+#    got daemon-reloaded, but the live timer instance kept running on its stale, previously-loaded
+#    config until manually restarted.
+run_sudo systemctl enable gp-monitor-poll.timer
+run_sudo systemctl restart gp-monitor-poll.timer
 
 echo "==> Done. Check: systemctl status gp-monitor-poll.timer"
