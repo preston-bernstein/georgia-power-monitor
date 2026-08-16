@@ -20,12 +20,13 @@ ProtectSystem=strict
 ProtectHome=read-only
 # ProtectSystem=strict remounts the whole filesystem read-only except these two paths. Both are
 # required: breaker.py writes data/breaker_state.json under the app dir, and metrics.py's
-# DEFAULT_TEXTFILE_DIR (/var/lib/node_exporter/textfile_collectors, see metrics.py) is where the
-# node-exporter textfile collector metrics land. Without the second path, every real run's
-# write_metrics() call raises PermissionError (read-only filesystem) *after* a successful
-# publish, turning a genuinely successful cycle into a logged failure and permanently starving
-# the gp_monitor_last_run_* dead-man's-switch metrics (plan.md) from ever being written.
-ReadWritePaths=/home/gp-monitor/app/data /var/lib/node_exporter/textfile_collectors
+# DEFAULT_TEXTFILE_DIR (/opt/docker/observability/node-exporter-textfiles, per home-infra
+# CONVENTIONS.md §18 and metrics.py) is where the node-exporter textfile collector metrics land.
+# Without the second path, every real run's write_metrics() call raises PermissionError
+# (read-only filesystem) *after* a successful publish, turning a genuinely successful cycle into
+# a logged failure and permanently starving the gp_monitor_last_run_* dead-man's-switch metrics
+# (plan.md) from ever being written.
+ReadWritePaths=/home/gp-monitor/app/data /opt/docker/observability/node-exporter-textfiles
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

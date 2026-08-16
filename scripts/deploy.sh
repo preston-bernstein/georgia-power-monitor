@@ -49,6 +49,17 @@ else
     run_sudo useradd -r -s /sbin/nologin "${SERVICE_USER}"
 fi
 
+# 1a. Group membership for the shared node-exporter textfile-collector directory (home-infra
+#     CONVENTIONS.md §18 -- ReadWritePaths in the .service unit alone is not enough; the directory
+#     itself is group-writable to node-exporter-textfile, not world-writable, matching every other
+#     fleet service (e.g. algo-macro). Only wire this in if that group actually exists on this
+#     host -- i.e. the shared observability stack is deployed here; skip quietly otherwise.
+if getent group node-exporter-textfile >/dev/null 2>&1; then
+    run_sudo usermod -aG node-exporter-textfile "${SERVICE_USER}"
+else
+    echo "WARN: group node-exporter-textfile does not exist on this host -- metrics.py's textfile write will fail until the shared observability stack is deployed here." >&2
+fi
+
 # 2. App + venv directories, owned by the service user.
 run_sudo install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${APP_DIR}" "${APP_DIR}/data" "${VENV_DIR}"
 

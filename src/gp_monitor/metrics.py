@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import time
 
-DEFAULT_TEXTFILE_DIR = "/var/lib/node_exporter/textfile_collectors"
+DEFAULT_TEXTFILE_DIR = "/opt/docker/observability/node-exporter-textfiles"
 TEXTFILE_DIR_ENV = "GP_MONITOR_TEXTFILE_DIR"
 METRIC_FILE_NAME = "gp_monitor.prom"
 
