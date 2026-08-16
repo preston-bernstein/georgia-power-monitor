@@ -5,7 +5,8 @@ Standalone script -- not part of the Click CLI (`gp_monitor.cli`) -- run manuall
 or auto-invoked as the final smoke step of `scripts/deploy.sh`. Validates two things about the
 Home Assistant target, and nothing else:
 
-  (a) HA reachability -- GET <ha_base_url>/api/, expect 2xx.
+  (a) HA reachability -- GET <ha_base_url>/api/ (no auth), expect any HTTP response (a real HA
+      instance returns 401 unauthenticated -- that still proves it's up).
   (b) HA token validity -- GET <ha_base_url>/api/states with the long-lived Bearer token, expect 2xx.
 
 Deliberately does NOT check egress/proxy connectivity and NEVER imports or calls anything related
@@ -57,7 +58,14 @@ def _load_token(env_file: str | None) -> str | None:
 
 
 def _check_ha_reachable(client: httpx.Client, base_url: str) -> tuple[bool, str]:
-    """Check (a): GET <base_url>/api/, expect 2xx. Never touches Georgia Power."""
+    """Check (a): GET <base_url>/api/ (no auth header), expect any HTTP response. Never touches
+    Georgia Power.
+
+    This deliberately does NOT require a 2xx status. A real, healthy Home Assistant instance
+    returns 401 for an unauthenticated request to `/api/` -- that response still proves the host
+    is reachable and speaking HTTP. Only a connection-level failure (timeout, refused connection,
+    DNS failure) means "not reachable"; check (b) below is what judges the token itself.
+    """
     url = f"{base_url.rstrip('/')}/api/"
     try:
         response = client.get(url, timeout=_TIMEOUT_SECONDS)
@@ -66,9 +74,7 @@ def _check_ha_reachable(client: httpx.Client, base_url: str) -> tuple[bool, str]
     except httpx.HTTPError:
         return False, f"could not connect to {url}"
 
-    if 200 <= response.status_code < 300:
-        return True, f"HA reachable at {url} (HTTP {response.status_code})"
-    return False, f"got HTTP {response.status_code} from {url}"
+    return True, f"HA reachable at {url} (HTTP {response.status_code})"
 
 
 def _check_token_valid(client: httpx.Client, base_url: str, token: str | None) -> tuple[bool, str]:
