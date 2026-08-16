@@ -1,0 +1,260 @@
+# Plan: Georgia Power Monitor
+
+## Approach
+
+A daily systemd-timer oneshot CLI (`gp-monitor poll`), structurally identical to `internal-monitor-service`
+(`src/`, `systemd/`, `ops/`, `pyproject.toml`/setuptools, `config.example.yaml`, `.env.example`),
+authenticates to Georgia Power's actual reverse-engineered JWT REST API — not a rendered web page —
+via the real, maintained `southern-company-api` PyPI package (the literal upstream FR-1 references
+by name; confirmed by pulling and reading its wheel directly). That library performs a plain
+`aiohttp` login/token-exchange flow (verification token → `ScWebToken` → `SouthernJwtCookie` → JWT),
+never a browser, so `scraper-commons`' browser-oriented modules (`stealth`, `fetch`, `login`) do not
+apply here; this plan instead wraps the library with `scraper-commons`' **non-browser** primitives —
+`rate.RateGovernor` (pacing), `cease` (halt-on-notice registry, extended with a new platform id),
+and `egress.assert_isolated_egress` (pre-flight isolated-VPN-egress check) — which satisfies FR-2's
+intent (scraper-commons owns session/rate/legal discipline) without forcing an architecture mismatch
+onto a target that isn't actually browser-gated. Retrieved usage/billing figures are pushed to Home
+Assistant over its REST API with a long-lived token (no MQTT broker exists in `internal-infra` today, so
+REST is the only viable path, not a stopgap).
+
+## Architecture
+
+```
+systemd timer (daily, OnCalendar)
+        │
+        ▼
+gp-monitor poll  (oneshot CLI, src/gp_monitor/cli.py)
+        │
+        ├─ 1. egress.assert_isolated_egress(proxy=EGRESS_PROXY_URL)   ── scraper-commons
+        │     fail-closed: abort cycle, log, exit non-zero if not isolated/gateway down
+        │
+        ├─ 2. cease.is_halted("georgia_power")                         ── scraper-commons
+        │     abort cycle immediately if a human has recorded a halt
+        │
+        ├─ 3. rate.RateGovernor(per_host_rps=0.05).acquire(host)       ── scraper-commons
+        │     paces every outbound call to customerservice2*.southerncompany.com /
+        │     webauth.southernco.com through one shared governor instance for the run
+        │
+        ├─ 4. auth.login(session, username, password)                  ── new local module,
+        │     wraps southern_company_api.SouthernCompanyAPI(username, password, session).connect()
+        │     bounded retry (config: max_login_attempts, default 2) on InvalidLogin/
+        │     NoScTokenFound/NoJwtTokenFound/CantReachSouthernCompany — never on other exceptions
+        │
+        ├─ 5. collect.get_usage_and_billing(account, jwt)               ── new local module,
+        │     calls account.get_month_data(jwt) → MonthlyUsage
+        │     (total_kwh_used, dollars_to_date, period = first-of-month..today)
+        │
+        ├─ 6. publish.push_to_ha(usage, billing)                       ── new local module
+        │     POST /api/states/<entity_id> per entity to ha.example.internal:8123, Bearer token
+        │     only reached if steps 1-5 all succeeded — never publishes partial/stale data
+        │
+        └─ 7. fleet_logging.log_event(...) at every step boundary + one closing outcome line
+              + node-exporter textfile metrics (gp_monitor_last_run_*)
+```
+
+Each numbered step either completes or the whole cycle aborts with a logged failure (FR-12); there
+is no partial-publish path. Re-authentication (FR-9) is "just run step 4 again next scheduled poll"
+— the process is not long-lived (`Type=oneshot`), so there is no live session to expire mid-cycle;
+the one exception is a JWT that expires between step 4 and step 5 within the same run, handled by
+re-invoking `SouthernCompanyAPI.jwt` (the library's own property already re-fetches on expiry) once,
+bounded by the same `max_login_attempts` counter.
+
+## Data model
+
+No relational database. This is a stateless poll-and-publish job — Home Assistant's own recorder is
+the system of record for history, matching "no historical backfill" (out of scope) and keeping this
+repo simpler than `internal-monitor-service` (which needs local SQLite because it correlates against a
+separate snapshot over time; this repo does not).
+
+One small local JSON state file, `data/breaker_state.json` (gitignored, mode 0600), tracks bounded
+retry state across scheduled runs — mirrors the shape internal-monitor-app's Poshmark login circuit
+breaker used for the same reason (a plain JSON file, not a database, is enough for one counter):
+
+```
+{
+  "consecutive_failures": <int>,
+  "last_failure_at": "<ISO8601>",
+  "last_failure_reason": "<short code, e.g. 'invalid_login' | 'no_jwt' | 'egress_not_isolated' | 'ha_unreachable'>"
+}
+```
+
+No credential or credential-derived value (JWT, password) is ever written to this file — `reason`
+is a closed set of short diagnostic codes, never a raw exception message (which could echo response
+headers containing the JWT). After `max_consecutive_failures` (config, default 5) the cycle logs and
+exits without attempting login at all, until a human clears the file — same one-way-trip shape as
+`scraper-commons`' `admission` module, adapted locally rather than reused (see Technology choices).
+
+## API / interface contract
+
+**CLI** (`gp-monitor`, Click-based like `macro-monitor`):
+
+```
+gp-monitor poll [--config PATH] [--dry-run]     # the only command; --dry-run skips step 6 (HA publish)
+gp-monitor --version
+```
+
+**Home Assistant REST publish** (per entity, HA's existing, stable REST API — no new HA-side setup
+beyond the long-lived access token):
+
+```
+POST http://ha.example.internal:8123/api/states/sensor.georgia_power_usage_kwh
+Authorization: Bearer <HA_LONG_LIVED_TOKEN>
+Content-Type: application/json
+
+{
+  "state": "412.7",
+  "attributes": {
+    "unit_of_measurement": "kWh",
+    "friendly_name": "Georgia Power Usage (Month to Date)",
+    "period_start": "2026-08-01",
+    "period_end": "2026-08-16",
+    "device_class": "energy",
+    "state_class": "total_increasing"
+  }
+}
+```
+
+Second entity, same shape: `sensor.georgia_power_bill_to_date` (state = `MonthlyUsage.dollars_to_date`,
+`unit_of_measurement: "USD"`, `device_class: "monetary"`). A third, non-functional diagnostic entity,
+`sensor.georgia_power_monitor_last_poll`, is set to the ISO timestamp of the last *successful* cycle
+only (never touched on a failed cycle) so staleness is visible on the HA dashboard itself (partially
+covers the "no separate alerting" out-of-scope note — visibility, not alerting).
+
+**Error cases:**
+- Egress not isolated / gateway unreachable → cycle aborts before any Georgia Power call; logged as
+  `egress.check_failed`; nothing published; retried next scheduled interval (never immediately).
+- `cease.is_halted("georgia_power")` is `True` → cycle aborts immediately; logged as `cease.halted`;
+  no login attempt at all.
+- Login failure within `max_login_attempts` → each attempt logged as `auth.attempt_failed` with the
+  closed reason code (never credentials/tokens); after the bound, `auth.failed_bounded`, cycle ends,
+  nothing published.
+- `get_month_data` raises `UsageDataFailure`/`CantReachSouthernCompany` → logged as `collect.failed`;
+  cycle ends without publishing (never republishes the prior cycle's cached value as if fresh).
+- HA REST call returns non-2xx or times out → logged as `publish.failed`; the *other* entity, if
+  already published this cycle, is not retroactively un-published — but the cycle's outcome line is
+  still `outcome=partial_failure`, and `sensor.georgia_power_monitor_last_poll` is deliberately NOT
+  advanced on a partial-failure cycle (so partial data is visible in HA but is provably flagged stale
+  by the untouched last-poll timestamp, satisfying "does not publish stale data as if it were fresh"
+  even for the entity that did succeed this cycle).
+
+## Integration points
+
+- `src/gp_monitor/__init__.py` — Python package initialization (empty or minimal; created alongside config.py/log.py).
+- `src/gp_monitor/cli.py` — Click CLI, `poll`/`--version`, mirrors `macro_monitor/cli.py`'s shape.
+- `src/gp_monitor/auth.py` — **new**: wraps `southern_company_api.SouthernCompanyAPI`, bounded retry
+  on the library's own narrow exception set (`InvalidLogin`, `NoScTokenFound`, `NoJwtTokenFound`,
+  `CantReachSouthernCompany`), reads `GP_USERNAME`/`GP_PASSWORD` from process env (populated by
+  systemd's `EnvironmentFile=`, per FR-1/FR-11 — never read via `python-dotenv` tree-walking, same
+  guard as `macro_monitor/config.py`'s `_NO_DOTENV`).
+- `src/gp_monitor/collect.py` — **new**: calls `account.get_month_data(jwt)`, maps `MonthlyUsage` to
+  the two publish-ready values (FR-3/FR-4).
+- `src/gp_monitor/breaker.py` — **new**: the JSON circuit-breaker file (see Data model), same
+  5-consecutive-failure trip shape as internal-monitor-app's `poshmark/login-circuit-breaker.ts`.
+- `src/gp_monitor/publish.py` — **new**: thin `httpx` client for HA's `/api/states/<entity_id>`,
+  reads `HA_BASE_URL` (config.yaml, not secret) and `HA_LONG_LIVED_TOKEN` (`.env`, secret, FR-11).
+- `src/gp_monitor/log.py`, `src/gp_monitor/config.py` — thin wrappers around `fleet_logging`, copied
+  verbatim from `internal-monitor-service/src/macro_monitor/{log,config}.py`'s pattern (stderr channel,
+  `env_prefix="GP_MONITOR_"`, `_NO_DOTENV` guard) — not reinvented (FR-10).
+- `src/gp_monitor/metrics.py` — node-exporter textfile writer, same four-metric shape as
+  `macro_monitor/metrics.py` (`gp_monitor_last_run_timestamp_seconds`, `_last_run_success`,
+  `_work_quantity`, `_work_available`), one `phase="poll"` label.
+- `pyproject.toml` — setuptools, `src/` layout, `southern-company-api` + `scraper-commons` (`rate`,
+  `cease`, `egress` — no `stealth`/`sidecar`/`browser` extras needed) + pinned `fleet-logging`, same
+  git-pin convention as `internal-monitor-service/pyproject.toml`.
+- `systemd/gp-monitor-poll.service` + `.timer` — `Type=oneshot`, `EnvironmentFile=/home/gp-monitor/app/.env`
+  (mode 600, root-owned, service-user-readable only), same hardening block as
+  `internal-monitor-service/systemd/macro-monitor-collect.service` (`ProtectSystem=strict`, `NoNewPrivileges`,
+  etc.), `OnCalendar` daily (see Risk areas / poll-interval justification below) (FR-5/FR-13).
+- `config.example.yaml` — `ha_base_url`, `poll interval config key`, `max_login_attempts`,
+  `max_consecutive_failures`, entity-id/friendly-name overrides (FR-14).
+- `.env.example` — `GP_USERNAME=`, `GP_PASSWORD=`, `HA_LONG_LIVED_TOKEN=`, `EGRESS_PROXY_URL=`,
+  documented, no real values (FR-14/FR-11).
+- `scripts/deploy.sh` — mirrors `internal-monitor-service/scripts/deploy.sh`: verify service user exists,
+  rsync `src`/`pyproject.toml`, venv + pip install, install systemd units, enable timer.
+- `ops/preflight.py` — **new**, small standalone script (not the poll path itself): checks HA
+  reachability (`GET /api/`) and long-lived token validity, and checks the egress proxy is up,
+  *without* touching Georgia Power — run manually after deploy and from `scripts/deploy.sh`'s final
+  smoke step, same spirit as `macro-monitor --version` being the deploy smoke check.
+- **`~/dev/scraper-commons` (sibling repo, cross-repo prerequisite, not part of this repo's diff)** —
+  `cease.KNOWN_PLATFORMS` is currently the closed set `{"youtube", "reddit", "tiktok"}`; add
+  `"georgia_power"` before this repo's `cease.halt()`/`is_halted()` calls can be used at all
+  (`ValueError` otherwise). Small, one-line, matches the module's own "extracted on first real need"
+  convention already used for every other platform in that set.
+- **`~/dev/internal-infra` (sibling repo, cross-repo prerequisite, not part of this repo's diff)** — the
+  shared `egress-gateway` (ADR 0014) is consumed today only via Docker's `network_mode: service:...`,
+  which requires the consumer to be a container in the same Compose project. This repo is a bare
+  systemd process (per the internal-monitor-service structural constraint), not a container, so it cannot
+  attach that way. It needs the gateway to expose a SOCKS5/HTTP proxy port a host process can point
+  at directly — `scraper_commons.egress.assert_isolated_egress(proxy: str, ...)`'s signature already
+  expects exactly this shape (a proxy URL, not a network namespace), so this is confirming/adding
+  that exposure on the `gluetun-scraper` container, not inventing a new isolation mechanism.
+
+## Technology choices
+
+- **`southern-company-api`** (PyPI, MIT, actively maintained, `aiohttp`-based) — the actual FR-1
+  reference implementation; verified by downloading and reading the wheel directly (not assumed from
+  its README). It performs Georgia Power's real login/JWT flow already; reimplementing that flow by
+  hand inside this repo would duplicate work `scraper-commons`' own "extract only on first need"
+  philosophy argues against, and would fail the requirement to follow the reference's login/session
+  shape.
+- **`scraper-commons` `rate`/`cease`/`egress` only, not `stealth`/`fetch`/`login`/`identity`** — the
+  target is a JSON/JWT REST API, not a rendered, JS-gated page; the browser-oriented modules solve a
+  problem this integration doesn't have, and (independently) `scraper_commons.login.authenticated_login()`
+  is explicitly documented as pass-cli/ProtonPass-gated and "NOT expected to run headless, from cron,
+  or under a dedicated service user" — incompatible with FR-1's `.env`-sourced credentials and FR-13's
+  systemd deployment regardless of target shape. This is a deliberate, evidence-backed scope decision,
+  not an oversight — confirmed by reading `scraper-commons/CONTRACT.md`'s `login` module section.
+- **HA REST API with a long-lived token, not MQTT discovery** — confirmed no MQTT broker exists
+  anywhere in `internal-infra` (`docker-compose.yml`, ADR list, and a code search all came up empty).
+  REST is not a stopgap here; it is what the fleet actually has today, per FR-7's own stated fallback.
+- **`httpx`** for the HA REST client — already a dependency pattern in `internal-monitor-service`
+  (`pyproject.toml`), no new HTTP library introduced fleet-wide.
+- **`fleet_logging`** (git-pinned) + the thin `log.py`/`config.py` wrapper pattern — copied from
+  `internal-monitor-service`, not reimplemented, per the explicit FR-10 constraint.
+- **Click** for the CLI — matches `macro-monitor`'s existing CLI framework choice, no new pattern.
+- **Plain JSON circuit-breaker file**, not `scraper-commons`' `admission` module — `admission` solves
+  quarantine-to-trust promotion for *new sources*, a different shape than "stop retrying after N
+  failures then require a human"; internal-monitor-app already established this exact plain-JSON pattern
+  for the same login-failure-bound need (Poshmark), so this repo mirrors that, not `admission`.
+
+## Risk areas
+
+1. **`cease.KNOWN_PLATFORMS` and the egress-gateway's host-reachable proxy port both need a small
+   cross-repo change before this repo can be fully wired (see Integration points).** Neither is
+   large, but both are prerequisites owned by sibling repos (`scraper-commons`, `internal-infra`), not
+   this one — build order matters, and a build that skips them silently degrades to "no cease
+   protection" / "no egress isolation," which must fail loudly (raise/abort), never silently no-op.
+2. **`southern-company-api` has no CAPTCHA/2FA handling of any kind** — confirmed by reading its
+   source directly: the only auth-failure exceptions are `InvalidLogin`, `NoScTokenFound`,
+   `NoJwtTokenFound`, `CantReachSouthernCompany`, none of which distinguish "wrong password" from
+   "portal now requires MFA" from "portal changed its login-page markup" (the token-scraping regexes
+   over HTML/redirect headers are brittle by construction). If Georgia Power's real portal has MFA
+   enabled on this account, or adds a CAPTCHA, this integration goes silently, permanently inert
+   (bounded-retry failures every cycle) until a human investigates — there is no automated recovery
+   path, by design (FR-12 says fail safely, not fail invisibly forever). Verify at build time whether
+   Preston's account has MFA; disable it for this account if Georgia Power allows, or accept this as
+   a standing manual-intervention risk.
+3. **The unofficial API can change or break without notice** — it's reverse-engineered (regexes over
+   HTML comments and `Set-Cookie` headers, per the library's own source), maintained by one outside
+   developer, with no SLA. A Georgia Power-side change breaks this repo's login or `get_month_data`
+   call with no advance warning; the bounded-retry + circuit-breaker design (FR-9/FR-12) prevents a
+   crash loop but does not prevent extended silent data staleness beyond what
+   `sensor.georgia_power_monitor_last_poll` surfaces on the HA dashboard.
+4. **Ban/lockout risk from automated login is real and only partially mitigated.** `rate.RateGovernor`
+   and `egress` isolation reduce (not eliminate) the chance Georgia Power flags this as bot traffic;
+   this is a real personal account, not a scraping target that can be walked away from if it gets
+   banned — an account lockout has a real-world consequence (losing normal web/app access to the
+   bill). Daily polling (see below) keeps call volume minimal, which is the primary mitigation.
+5. **`MonthlyUsage.dollars_to_date` is a proxy for "billing," not a true account balance/amount-due
+   field** — the reference library exposes month-to-date cost accrual from usage data, not a
+   dedicated "current balance owed" endpoint (none was found in its source). FR-4 ("current balance
+   and/or most recent bill amount") is satisfiable by `dollars_to_date` literally, but it will read
+   differently from the number on an actual Georgia Power bill (which includes fixed charges, prior
+   balance, taxes) — worth setting Preston's expectations on before this ships, not after.
+6. **Poll-interval justification (AC-8), stated plainly:** the reference library's own source
+   comments read `get_daily_data`: "Available 24 hours after" and `get_hourly_data`: "Available 48
+   hours after" — Georgia Power's AMI meter data has a built-in 24-48h publication lag regardless of
+   how often this service polls. A **daily** `OnCalendar` timer (once every 24h) is therefore the
+   floor of what's useful and the ceiling of what's justified by the upstream refresh cadence — polling
+   more often would retrieve the same figures repeatedly for no benefit while adding needless login
+   volume against risk #4. This satisfies NFR "must not exceed the actual upstream data-refresh rate."

@@ -1,0 +1,58 @@
+# Georgia Power Monitor configuration example.
+# Copy this file to config.yaml and edit with your values. All keys are optional and default to
+# the values shown below. Environment variable overrides are supported via GP_MONITOR_* prefix
+# (e.g., GP_MONITOR_POLL_INTERVAL_SECONDS=3600 overrides poll_interval_seconds: 86400).
+#
+# For secrets (GP_USERNAME, GP_PASSWORD, HA_LONG_LIVED_TOKEN), always use the process
+# environment or systemd's EnvironmentFile= — never put them in this file. See .env.example.
+
+# Home Assistant base URL. Must be a private/loopback IP or localhost/.local name (the HA Bearer
+# token is never sent to a public address). Scheme must be http:// or https://.
+# Default: http://ha.example.internal:8123 (the documented deploy target)
+ha_base_url: http://ha.example.internal:8123
+
+# Poll interval in seconds. The task runs once per this interval. GA Power publishes usage data
+# with a 24-48 hour lag, so a daily (86400s) interval is the minimum practical window.
+# Validation: must be > 0.
+# Default: 86400 (24 hours)
+poll_interval_seconds: 86400
+
+# Maximum login retry attempts. Each failed login (authentication error, connectivity issue, etc.)
+# counts as one attempt; retries stop once this limit is reached.
+# Validation: must be > 0.
+# Default: 2
+max_login_attempts: 2
+
+# Maximum consecutive failures before the cycle is marked failed. This gates the publish step:
+# if data collection fails more than this many times in a row, the cycle exits without pushing
+# to Home Assistant, allowing upstream alerting to catch a prolonged outage.
+# Validation: must be > 0.
+# Default: 5
+max_consecutive_failures: 5
+
+# Home Assistant entity ID for monthly usage (kWh). Must be lowercase letters/digits/underscores,
+# formatted as domain.object_id. Overrides the default to customize where usage is published in HA.
+# Default: sensor.georgia_power_usage_kwh
+entity_id_usage: sensor.georgia_power_usage_kwh
+
+# Home Assistant entity ID for bill to date (USD). Must be lowercase letters/digits/underscores,
+# formatted as domain.object_id. Overrides the default to customize where bill data is published.
+# Default: sensor.georgia_power_bill_to_date
+entity_id_bill: sensor.georgia_power_bill_to_date
+
+# Home Assistant entity ID for last poll timestamp (ISO-8601 UTC). Must be lowercase letters/digits/underscores,
+# formatted as domain.object_id. Only advanced when both usage and bill publish successfully.
+# Default: sensor.georgia_power_last_poll
+entity_id_last_poll: sensor.georgia_power_last_poll
+
+# Friendly name for the usage entity as shown in the Home Assistant UI.
+# Default: Georgia Power Usage (Month to Date)
+friendly_name_usage: Georgia Power Usage (Month to Date)
+
+# Friendly name for the bill entity as shown in the Home Assistant UI.
+# Default: Georgia Power Bill (Month to Date)
+friendly_name_bill: Georgia Power Bill (Month to Date)
+
+# Friendly name for the last-poll timestamp entity as shown in the Home Assistant UI.
+# Default: Georgia Power Last Poll
+friendly_name_last_poll: Georgia Power Last Poll

@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily trigger for Georgia Power Monitor polling
+Documentation=https://github.com/preston-bernstein/georgia-power-monitor
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+StartLimitIntervalSec=86400
+StartLimitBurst=1
+
+[Install]
+WantedBy=timers.target
