@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gp-monitor"
+version = "0.1.0"
+description = "Georgia Power Monitor — polls usage/billing data and publishes to Home Assistant"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Preston Bernstein", email = "contact@prestonbernstein.com" }]
+dependencies = [
+    "click>=8.1",
+    "httpx>=0.27",
+    "pydantic>=2.0",
+    "southern-company-api>=0.7.0",
+    # Shared home-infra CONVENTIONS.md §18 logging + yaml/env config loader. Pinned to an exact
+    # commit, not a floating branch. Bump this pin by hand when a newer fleet-logging commit is wanted.
+    "fleet-logging @ git+ssh://git@github.com/preston-bernstein/fleet-logging.git@fab3ce04dbd1b16479527fe4a512c6f8d1f960fb",
+    # Shared scraper utilities for rate-limiting and cease-fire (Georgia Power in KNOWN_PLATFORMS).
+    # Pinned to rate + cease modules only; no browser extras. Pin by hand when newer commit is wanted.
+    "scraper-commons @ git+ssh://git@github.com/preston-bernstein/scraper-commons.git@36565de",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.21",
+]
+
+[project.scripts]
+gp-monitor = "gp_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "network: test performs a live network fetch (skips gracefully if unreachable)",
+]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.mutmut]
+source_paths = [
+    "src/gp_monitor/auth.py",
+    "src/gp_monitor/collect.py",
+    "src/gp_monitor/breaker.py",
+    "src/gp_monitor/cli.py",
+    "src/gp_monitor/publish.py",
+]
+# Not mutated (thinner wrappers / config), but must be present in the mutants/
+# copy of the package so the mutated modules can still import them.
+also_copy = [
+    "src/gp_monitor/__init__.py",
+    "src/gp_monitor/config.py",
+    "src/gp_monitor/log.py",
+    "src/gp_monitor/metrics.py",
+    "ops/preflight.py",
+]
+runner = "./venv/bin/pytest -x -q"
