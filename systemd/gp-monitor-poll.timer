@@ -1,12 +1,15 @@
 [Unit]
 Description=Daily trigger for Georgia Power Monitor polling
 Documentation=https://github.com/preston-bernstein/georgia-power-monitor
+# StartLimitIntervalSec/StartLimitBurst belong in [Unit], not [Timer] (systemd.unit(5)) -- systemd
+# silently ignores them in the wrong section, so this timer previously had no start-rate-limiting
+# at all. Caught only by reading `systemctl status` output during a real deploy.
+StartLimitIntervalSec=86400
+StartLimitBurst=1
 
 [Timer]
 OnCalendar=daily
 Persistent=true
-StartLimitIntervalSec=86400
-StartLimitBurst=1
 
 [Install]
 WantedBy=timers.target
