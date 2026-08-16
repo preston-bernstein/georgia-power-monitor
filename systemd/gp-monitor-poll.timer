@@ -1,11 +1,14 @@
 [Unit]
 Description=Daily trigger for Georgia Power Monitor polling
 Documentation=https://github.com/preston-bernstein/georgia-power-monitor
-# StartLimitIntervalSec/StartLimitBurst belong in [Unit], not [Timer] (systemd.unit(5)) -- systemd
-# silently ignores them in the wrong section, so this timer previously had no start-rate-limiting
-# at all. Caught only by reading `systemctl status` output during a real deploy.
-StartLimitIntervalSec=86400
-StartLimitBurst=1
+# No StartLimitIntervalSec/StartLimitBurst here on purpose. Those throttle how often systemd will
+# let THIS TIMER UNIT be (re)started -- an operational/deploy concern -- not how often the poll
+# job actually contacts Georgia Power, which is what needed bounding. That's already handled
+# where it belongs: OnCalendar=daily below caps scheduled triggers to once a day, and
+# gp_monitor's own breaker.py/cease/rate.RateGovernor gate the real GP contact inside the service.
+# A previous version had these keys (misplaced in [Timer], so silently ignored) and, once moved
+# here correctly, immediately start-limit-hit the timer on a routine redeploy restart -- confirmed
+# live on a real deploy host, not hypothetical.
 
 [Timer]
 OnCalendar=daily
