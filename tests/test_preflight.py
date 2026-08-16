@@ -61,6 +61,27 @@ def test_both_checks_pass_returns_true_and_prints_pass(tmp_path, capsys):
     assert "PASS: HA token validity" in out
 
 
+def test_reachability_passes_on_401_from_api_root(tmp_path, capsys):
+    """A real Home Assistant instance returns 401 for an unauthenticated GET /api/ -- that response
+    still proves the host is up and speaking HTTP. Reachability must not require a 2xx status;
+    only check (b) (token validity) judges the status code. Regression test: this exact behavior
+    was missed by every other check in this repo's pipeline (mocks, mutation testing, code review)
+    because none of them exercised a real Home Assistant instance -- only caught by a live
+    deploy-time run against the real host."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == _API_URL:
+            return httpx.Response(401, json={"message": "Unauthorized"})
+        return httpx.Response(200, json={"ok": True})
+
+    ok = preflight.run_preflight(_write_config(tmp_path), None, client=_client(handler))
+
+    assert ok is True
+    out = capsys.readouterr().out
+    assert "PASS: HA reachability" in out
+    assert "HTTP 401" in out
+
+
 def test_ha_unreachable_returns_false_with_clear_message(tmp_path, capsys):
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused", request=request)
