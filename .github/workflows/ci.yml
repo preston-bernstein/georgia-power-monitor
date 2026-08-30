@@ -19,7 +19,8 @@ jobs:
     uses: preston-bernstein/ci-workflows/.github/workflows/python.yml@v1
     with:
       python-versions: '["3.12"]'
-      install: pip install -e ".[dev]"
+      # ruff is not in this project's dev extra, so install it alongside.
+      install: pip install -e ".[dev]" ruff
       lint: ruff check .
       test: pytest -q
     secrets:
