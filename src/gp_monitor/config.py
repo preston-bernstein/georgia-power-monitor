@@ -73,7 +73,10 @@ _ENTITY_ID_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 # Hostnames allowed for `ha_base_url` beyond a private-use/loopback IP literal — see
 # `_validate_ha_base_url`.
 _ALLOWED_HA_HOSTS = {"localhost"}
-_ALLOWED_HA_HOST_SUFFIXES = (".local",)
+# .internal is reserved by ICANN (2024) for private networks and is never
+# delegated in the public DNS, so it cannot resolve to a public host — the
+# thing this allowlist exists to prevent.
+_ALLOWED_HA_HOST_SUFFIXES = (".local", ".internal")
 
 
 @contextlib.contextmanager
@@ -119,7 +122,7 @@ def _validate_ha_base_url(value: str) -> None:
         return
     raise ValueError(
         f"config.invalid: ha_base_url host {host!r} is not allowlisted "
-        "(must be a private/loopback IP, 'localhost', or a '*.local' name)"
+        "(must be a private/loopback IP, 'localhost', or a '*.local' / '*.internal' name)"
     )
 
 
