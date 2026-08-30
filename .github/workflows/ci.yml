@@ -19,8 +19,14 @@ jobs:
     uses: preston-bernstein/ci-workflows/.github/workflows/python.yml@v1
     with:
       python-versions: '["3.12"]'
+      # Tests are off until this repo has a deploy key. It depends on
+      # fleet-logging, a private sibling pinned by commit over SSH, so pip
+      # cannot resolve it on a runner. Add a FLEET_LOGGING_DEPLOY_KEY secret
+      # (nba-predictor already has one), then drop the install override and
+      # pass secrets: ssh-private-key: ${{ secrets.FLEET_LOGGING_DEPLOY_KEY }}.
+      install: pip install ruff
       lint: ruff check .
-      test: pytest -q
+      test: ''
 
   workflows:
     uses: preston-bernstein/ci-workflows/.github/workflows/actions-lint.yml@v1
