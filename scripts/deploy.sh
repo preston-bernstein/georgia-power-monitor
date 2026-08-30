@@ -38,6 +38,62 @@ run_sudo() {
     run sudo "$@"
 }
 
+# ---- deploy-time uncommitted-file gate -------------------------------------
+# Mirrors internal-infra's tools/config-drift/preflight.sh repo-side check (ADR 0019, PR
+# #104): refuse to ship a file this deploy would push if it is not committed here. On
+# 2026-08-29 a concurrent session's uncommitted, broken config was rsynced by a routine
+# deploy elsewhere in the fleet and took down live log shipping with no warning -- this
+# is that same check, scoped to exactly what steps 3/5 below actually ship (src,
+# pyproject.toml, ops/, config.example.yaml, and the two systemd unit files -- NOT the
+# whole repo: this deploy does not rsync docs/, tests/, etc). Local git only, and since
+# this script runs directly on the target host (see header comment), it checks the SAME
+# checkout being deployed. Escape hatch: DEPLOY_GIT_GATE=skip (loud banner, not silent).
+SHIPPED_PATHS=(
+  config.example.yaml
+  ops
+  pyproject.toml
+  scripts/deploy.sh
+  src
+  systemd/gp-monitor-poll.service
+  systemd/gp-monitor-poll.timer
+)
+if [ "${DEPLOY_GIT_GATE:-}" = "skip" ]; then
+  cat >&2 <<'BANNER'
+############################################################################
+# DEPLOY_GIT_GATE=skip -- uncommitted-file check BYPASSED.
+# This deploy may ship files that exist nowhere but this machine's disk --
+# including another session's unfinished work, if one is active in this repo.
+############################################################################
+BANNER
+else
+  echo "==> Preflight: checking this deploy's files are committed"
+  set +e
+  "${REPO_ROOT}/scripts/check_deploy_clean.py" "${SHIPPED_PATHS[@]}"
+  GATE_RC=$?
+  set -e
+  case "$GATE_RC" in
+    0) : ;;
+    1)
+      cat >&2 <<EOF
+
+DEPLOY BLOCKED: files this deploy would ship are not committed in this repo (see above).
+
+  1. Review:  git status --porcelain -- <path>
+  2. Commit them (or leave them if another session is mid-work), then re-run.
+
+To ship deliberately: DEPLOY_GIT_GATE=skip $0
+EOF
+      exit 1
+      ;;
+    *)
+      echo "check_deploy_clean.py: could not determine whether shipped files are committed (exit ${GATE_RC})." >&2
+      echo "Refusing to deploy blind. Fix the check, or set DEPLOY_GIT_GATE=skip if you accept the risk." >&2
+      exit 2
+      ;;
+  esac
+fi
+# -----------------------------------------------------------------------------
+
 echo "==> Deploying gp-monitor to ${APP_DIR} (service user: ${SERVICE_USER})"
 
 # 1. Service user: verify, or create it if missing (unlike internal-monitor-service, gp-monitor's service
