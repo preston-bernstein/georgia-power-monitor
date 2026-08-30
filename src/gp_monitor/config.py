@@ -134,10 +134,11 @@ def _validate_entity_id(field_name: str, value: str) -> None:
 @dataclass
 class Config:
     # Home Assistant's base URL (config, not secret — the long-lived token is the secret, read
-    # from the process environment by publish.py). Default matches the documented deploy target
-    # (plan.md's API / interface contract) — a private LAN address, valid under
-    # `_validate_ha_base_url` with zero config.yaml present.
-    ha_base_url: str = "http://10.0.0.5:8123"
+    # from the process environment by publish.py). Defaults to loopback -- never a real LAN
+    # address baked into source (see tests/test_no_internal_topology.py). A real deployment
+    # supplies its own address via config.yaml (gitignored, host-local) or the
+    # `GP_MONITOR_HA_BASE_URL` env var override (see module docstring / README).
+    ha_base_url: str = "http://127.0.0.1:8123"
     poll_interval_seconds: int = 86400
     max_login_attempts: int = 2
     max_consecutive_failures: int = 5

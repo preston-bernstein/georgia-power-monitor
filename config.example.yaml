@@ -8,8 +8,9 @@
 
 # Home Assistant base URL. Must be a private/loopback IP or localhost/.local name (the HA Bearer
 # token is never sent to a public address). Scheme must be http:// or https://.
-# Default: http://10.0.0.5:8123 (the documented deploy target)
-ha_base_url: http://10.0.0.5:8123
+# Default: http://127.0.0.1:8123 (loopback -- set this to your real HA host/port, or override
+# with the GP_MONITOR_HA_BASE_URL env var instead of editing this file).
+ha_base_url: http://127.0.0.1:8123
 
 # Poll interval in seconds. The task runs once per this interval. GA Power publishes usage data
 # with a 24-48 hour lag, so a daily (86400s) interval is the minimum practical window.

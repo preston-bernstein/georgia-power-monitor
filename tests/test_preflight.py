@@ -28,7 +28,7 @@ def _load_preflight_module():
 
 preflight = _load_preflight_module()
 
-_BASE_URL = "http://10.0.0.5:8123"
+_BASE_URL = "http://127.0.0.1:8123"
 _API_URL = f"{_BASE_URL}/api/"
 _STATES_URL = f"{_BASE_URL}/api/states"
 
