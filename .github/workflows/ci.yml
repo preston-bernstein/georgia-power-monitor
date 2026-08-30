@@ -19,14 +19,14 @@ jobs:
     uses: preston-bernstein/ci-workflows/.github/workflows/python.yml@v1
     with:
       python-versions: '["3.12"]'
-      # Tests are off until this repo has a deploy key. It depends on
-      # fleet-logging, a private sibling pinned by commit over SSH, so pip
-      # cannot resolve it on a runner. Add a FLEET_LOGGING_DEPLOY_KEY secret
-      # (nba-predictor already has one), then drop the install override and
-      # pass secrets: ssh-private-key: ${{ secrets.FLEET_LOGGING_DEPLOY_KEY }}.
-      install: pip install ruff
+      install: pip install -e ".[dev]"
       lint: ruff check .
-      test: ''
+      test: pytest -q
+    secrets:
+      # Two private siblings, fleet-logging and scraper-commons, so the secret
+      # holds both keys. webfactory/ssh-agent picks the right one per repo from
+      # each key's comment, which is the literal clone URL.
+      ssh-private-key: ${{ secrets.FLEET_LOGGING_DEPLOY_KEY }}
 
   workflows:
     uses: preston-bernstein/ci-workflows/.github/workflows/actions-lint.yml@v1
