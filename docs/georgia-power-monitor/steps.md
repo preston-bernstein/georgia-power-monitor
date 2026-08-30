@@ -4,9 +4,9 @@
 
 1. **Verify Georgia Power account MFA status** — Preston must personally verify whether his Georgia Power account has MFA enabled (the `southern-company-api` library doesn't support MFA/CAPTCHA at all) and either disable it or accept standing manual-intervention risk. This is a human decision about his own account security — not an automatable build step. Confirm with Preston before Steps 15-16 (the live-credential steps).
 
-2. **Select managed deploy host** — Decide between desktop (desktop.example.internal) or vmhost.example.internal (vmhost.example.internal) based on current load, LAN reachability to Home Assistant (ha.example.internal), and spare capacity. vmhost.example.internal currently runs arr-stack + internal-monitor-app; desktop is the preferred default if it has capacity. This choice determines where step 14 installs the service user and systemd units.
+2. **Select managed deploy host** — Decide between <deploy-host-a> or <deploy-host-b> based on current load, LAN reachability to Home Assistant (<ha-host>), and spare capacity. <deploy-host-b> currently runs other unrelated home-lab services; <deploy-host-a> is the preferred default if it has capacity. This choice determines where step 14 installs the service user and systemd units.
 
-3. **Verify Home Assistant accessibility** — Confirm ha.example.internal:8123 is reachable from the selected deploy host over the LAN (no proxy/firewall blocking HTTP to the HA port). No long-lived access token yet (it will be provided by Preston at deploy time).
+3. **Verify Home Assistant accessibility** — Confirm <ha-host>:8123 is reachable from the selected deploy host over the LAN (no proxy/firewall blocking HTTP to the HA port). No long-lived access token yet (it will be provided by Preston at deploy time).
 
 ## Implementation steps
 
@@ -15,7 +15,7 @@
 
 **Files**: `~/dev/scraper-commons/src/scraper_commons/cease/registry.py`
 
-**Test**: Run `python3 -c "from scraper_commons import cease; assert 'georgia_power' in cease.KNOWN_PLATFORMS"` on the desktop. Should complete without error. Then verify the change is committed and pushed to the scraper-commons remote (`git log -1 --oneline`, `git remote -v`, confirm origin/main is updated).
+**Test**: Run `python3 -c "from scraper_commons import cease; assert 'georgia_power' in cease.KNOWN_PLATFORMS"` on the selected deploy host. Should complete without error. Then verify the change is committed and pushed to the scraper-commons remote (`git log -1 --oneline`, `git remote -v`, confirm origin/main is updated).
 
 **Depends on**: None.
 
@@ -79,7 +79,7 @@
 **Parallelizable**: Yes (independent of auth.py, publish.py, etc.).
 
 ### Step 6: Implement publish.py
-**What**: Create `src/gp_monitor/publish.py` — an `httpx`-based client that POSTs usage and billing data to Home Assistant's `/api/states/<entity_id>` endpoint. Publishes three entities: `sensor.georgia_power_usage_kwh` (state = `total_kwh_used`, unit `"kWh"`, device_class `"energy"`), `sensor.georgia_power_bill_to_date` (state = `dollars_to_date`, unit `"USD"`, device_class `"monetary"`), `sensor.georgia_power_last_poll` (state = ISO timestamp of *successful* cycles only). Reads `HA_BASE_URL` from config (e.g., `"http://ha.example.internal:8123"`) and `HA_LONG_LIVED_TOKEN` from env. Each POST includes period_start/period_end/friendly_name attributes. Raises `PublishFailed` on non-2xx response or timeout. Never publishes partial data — if any entity POST fails, the cycle is marked `partial_failure` and `sensor.georgia_power_last_poll` is not advanced (so staleness is visible in HA).
+**What**: Create `src/gp_monitor/publish.py` — an `httpx`-based client that POSTs usage and billing data to Home Assistant's `/api/states/<entity_id>` endpoint. Publishes three entities: `sensor.georgia_power_usage_kwh` (state = `total_kwh_used`, unit `"kWh"`, device_class `"energy"`), `sensor.georgia_power_bill_to_date` (state = `dollars_to_date`, unit `"USD"`, device_class `"monetary"`), `sensor.georgia_power_last_poll` (state = ISO timestamp of *successful* cycles only). Reads `HA_BASE_URL` from config (e.g., `"http://<ha-host>:8123"`) and `HA_LONG_LIVED_TOKEN` from env. Each POST includes period_start/period_end/friendly_name attributes. Raises `PublishFailed` on non-2xx response or timeout. Never publishes partial data — if any entity POST fails, the cycle is marked `partial_failure` and `sensor.georgia_power_last_poll` is not advanced (so staleness is visible in HA).
 
 **Files**: `src/gp_monitor/publish.py`
 
@@ -171,7 +171,7 @@
 
 **Files**: `scripts/deploy.sh`
 
-**Test**: Run the script on the selected deploy host (desktop or vmhost.example.internal) with a mock/example `.env` file (can use empty values for smoke test; preflight will skip HA token validation if token is missing, or Preston provides real token). Verify: (a) service user exists, (b) venv is created and pip install succeeds, (c) systemd units are copied and daemon-reload succeeds, (d) preflight output shows at least the connectivity checks (HA URL check), (e) timer is enabled (`systemctl is-enabled gp-monitor-poll.timer` returns `enabled`).
+**Test**: Run the script on the selected deploy host (<deploy-host-a> or <deploy-host-b>) with a mock/example `.env` file (can use empty values for smoke test; preflight will skip HA token validation if token is missing, or Preston provides real token). Verify: (a) service user exists, (b) venv is created and pip install succeeds, (c) systemd units are copied and daemon-reload succeeds, (d) preflight output shows at least the connectivity checks (HA URL check), (e) timer is enabled (`systemctl is-enabled gp-monitor-poll.timer` returns `enabled`).
 
 **Depends on**: Steps 9, 11c.
 
@@ -191,7 +191,7 @@
 ### Step 14: Deploy to selected host
 **HUMAN-GATED STEP**: This step requires Preston to personally supply real Georgia Power credentials and/or a Home Assistant long-lived access token. An autonomous build pipeline can prepare everything up to this point (code complete, locally verified with mocks) but cannot complete this step on its own — it must be reported as a pending action for Preston, not silently marked done.
 
-**What**: Run `scripts/deploy.sh` on the selected managed host (desktop or vmhost.example.internal, decided in Prerequisites). Provide a real `.env` file (or allow Preston to provide one at `/home/gp-monitor/app/.env` after the script completes). If provided, preflight.py will validate HA token is valid and reachable. If not provided at deploy time, the first scheduled poll will fail with auth error (expected; Preston supplies secrets at deploy time, not before).
+**What**: Run `scripts/deploy.sh` on the selected managed host (<deploy-host-a> or <deploy-host-b>, decided in Prerequisites). Provide a real `.env` file (or allow Preston to provide one at `/home/gp-monitor/app/.env` after the script completes). If provided, preflight.py will validate HA token is valid and reachable. If not provided at deploy time, the first scheduled poll will fail with auth error (expected; Preston supplies secrets at deploy time, not before).
 
 **Files**: (no new files; run existing deploy.sh)
 
@@ -217,11 +217,11 @@
 ### Step 16: Run integration test with real credentials
 **HUMAN-GATED STEP**: This step requires Preston to personally supply real Georgia Power credentials and/or a Home Assistant long-lived access token. An autonomous build pipeline can prepare everything up to this point but cannot complete a full integration test on its own.
 
-**What**: Provide Preston-supplied Georgia Power credentials in `/home/gp-monitor/app/.env` (if not already provided at step 14). Run `sudo systemctl start gp-monitor-poll.service` to execute a full cycle with real authentication and data retrieval. Verify that both `sensor.georgia_power_usage_kwh` and `sensor.georgia_power_bill_to_date` entities appear in Home Assistant at ha.example.internal:8123 with current values. Check the HA Developer Tools > States view to confirm entity IDs and attribute values are as documented in the plan. Verify `sensor.georgia_power_last_poll` is set to the ISO timestamp of this run.
+**What**: Provide Preston-supplied Georgia Power credentials in `/home/gp-monitor/app/.env` (if not already provided at step 14). Run `sudo systemctl start gp-monitor-poll.service` to execute a full cycle with real authentication and data retrieval. Verify that both `sensor.georgia_power_usage_kwh` and `sensor.georgia_power_bill_to_date` entities appear in Home Assistant at <ha-host>:8123 with current values. Check the HA Developer Tools > States view to confirm entity IDs and attribute values are as documented in the plan. Verify `sensor.georgia_power_last_poll` is set to the ISO timestamp of this run.
 
 **Files**: (no new files; run existing deployment with real credentials)
 
-**Test**: After running the service with real credentials: (a) `curl -H "Authorization: Bearer <HA_LONG_LIVED_TOKEN>" http://ha.example.internal:8123/api/states/sensor.georgia_power_usage_kwh | jq .state` should return a number (e.g., `"412.7"`); (b) same for `sensor.georgia_power_bill_to_date` (should return a dollar amount); (c) `sensor.georgia_power_last_poll` should be an ISO timestamp younger than 5 minutes; (d) systemd service status should show exit code 0 and `"outcome=success"` in journalctl logs. **PASS only when all four checks pass and `outcome=success` is confirmed in journalctl.**
+**Test**: After running the service with real credentials: (a) `curl -H "Authorization: Bearer <HA_LONG_LIVED_TOKEN>" http://<ha-host>:8123/api/states/sensor.georgia_power_usage_kwh | jq .state` should return a number (e.g., `"412.7"`); (b) same for `sensor.georgia_power_bill_to_date` (should return a dollar amount); (c) `sensor.georgia_power_last_poll` should be an ISO timestamp younger than 5 minutes; (d) systemd service status should show exit code 0 and `"outcome=success"` in journalctl logs. **PASS only when all four checks pass and `outcome=success` is confirmed in journalctl.**
 
 **Depends on**: Step 15 (timer verification must pass before full integration).
 

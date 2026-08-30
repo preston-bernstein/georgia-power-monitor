@@ -44,14 +44,14 @@ def test_valid_overrides_load_successfully(tmp_path):
     path = _write_config(
         tmp_path,
         {
-            "ha_base_url": "http://ha.example.internal:8123",
+            "ha_base_url": "http://127.0.0.1:8123",
             "poll_interval_seconds": 3600,
             "max_login_attempts": 3,
             "max_consecutive_failures": 10,
         },
     )
     cfg = load_config(path)
-    assert cfg.ha_base_url == "http://ha.example.internal:8123"
+    assert cfg.ha_base_url == "http://127.0.0.1:8123"
     assert cfg.poll_interval_seconds == 3600
     assert cfg.max_login_attempts == 3
     assert cfg.max_consecutive_failures == 10
@@ -80,7 +80,7 @@ def test_direct_construction_also_validates():
     "bad_url",
     [
         "not-a-url",
-        "ftp://ha.example.internal:8123",
+        "ftp://127.0.0.1:8123",
         "http://",
         "http://example.com",  # public host -- must not exfiltrate the HA Bearer token
         "https://georgia-power-attacker.example.net:8123",
@@ -95,7 +95,7 @@ def test_ha_base_url_rejects_disallowed_values(tmp_path, bad_url):
 @pytest.mark.parametrize(
     "good_url",
     [
-        "http://ha.example.internal:8123",
+        "http://10.20.30.40:8123",
         "http://lan.example.internal:8123",
         "http://127.0.0.1:8123",
         "http://localhost:8123",

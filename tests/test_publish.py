@@ -16,9 +16,9 @@ import pytest
 from gp_monitor.config import Config
 from gp_monitor.publish import HA_TOKEN_ENV_VAR, PublishFailed, _build_payload, _entity_url, push_to_ha
 
-_USAGE_URL = "http://ha.example.internal:8123/api/states/sensor.georgia_power_usage_kwh"
-_BILL_URL = "http://ha.example.internal:8123/api/states/sensor.georgia_power_bill_to_date"
-_LAST_POLL_URL = "http://ha.example.internal:8123/api/states/sensor.georgia_power_last_poll"
+_USAGE_URL = "http://127.0.0.1:8123/api/states/sensor.georgia_power_usage_kwh"
+_BILL_URL = "http://127.0.0.1:8123/api/states/sensor.georgia_power_bill_to_date"
+_LAST_POLL_URL = "http://127.0.0.1:8123/api/states/sensor.georgia_power_last_poll"
 
 
 @pytest.fixture(autouse=True)
@@ -195,12 +195,12 @@ def test_push_to_ha_missing_token_raises_publish_failed(monkeypatch, capsys):
 def test_entity_url_strips_trailing_slash_from_base_url():
     """Pins `.rstrip('/')` -- a base URL with a trailing slash must not produce a double slash."""
     assert (
-        _entity_url("http://ha.example.internal:8123/", "sensor.foo")
-        == "http://ha.example.internal:8123/api/states/sensor.foo"
+        _entity_url("http://127.0.0.1:8123/", "sensor.foo")
+        == "http://127.0.0.1:8123/api/states/sensor.foo"
     )
     assert (
-        _entity_url("http://ha.example.internal:8123", "sensor.foo")
-        == "http://ha.example.internal:8123/api/states/sensor.foo"
+        _entity_url("http://127.0.0.1:8123", "sensor.foo")
+        == "http://127.0.0.1:8123/api/states/sensor.foo"
     )
 
 
@@ -491,7 +491,7 @@ def test_post_entity_passes_the_configured_timeout(monkeypatch):
 def test_push_to_ha_timeout_raises_publish_failed_without_leaking_exception_text():
     # The raw exception text is deliberately made to look like it contains a credential fragment,
     # to prove PublishFailed's message never echoes the underlying exception's str().
-    raw_exception_text = "connect timeout to ha.example.internal:8123 with token abc123"
+    raw_exception_text = "connect timeout to 127.0.0.1:8123 with token abc123"
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.TimeoutException(raw_exception_text)

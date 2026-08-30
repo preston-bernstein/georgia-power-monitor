@@ -41,3 +41,6 @@ mutants/
 *.swo
 *~
 .DS_Store
+
+# Stray backup/draft files (e.g. spec-gather drafts) -- never committed
+*.bak

@@ -53,7 +53,7 @@ gp-monitor poll  (oneshot CLI, src/gp_monitor/cli.py)
         │     (total_kwh_used, dollars_to_date, period = first-of-month..today)
         │
         ├─ 5. publish.push_to_ha(usage, billing)                       ── new local module
-        │     POST /api/states/<entity_id> per entity to ha.example.internal:8123, Bearer token
+        │     POST /api/states/<entity_id> per entity to <ha-host>:8123, Bearer token
         │     only reached if steps 1-4 all succeeded — never publishes partial/stale data
         │
         └─ 6. fleet_logging.log_event(...) at every step boundary + one closing outcome line
@@ -125,7 +125,7 @@ from what `--dry-run` does against real infrastructure.)
 beyond the long-lived access token):
 
 ```
-POST http://ha.example.internal:8123/api/states/sensor.georgia_power_usage_kwh
+POST http://<ha-host>:8123/api/states/sensor.georgia_power_usage_kwh
 Authorization: Bearer <HA_LONG_LIVED_TOKEN>
 Content-Type: application/json
 
@@ -209,7 +209,7 @@ could otherwise mask a real parsing bug in the brittle reverse-engineered upstre
   (mode 600, root-owned, service-user-readable only), same hardening block as
   `internal-monitor-service/systemd/macro-monitor-collect.service` (`ProtectSystem=strict`, `NoNewPrivileges`,
   etc.), `OnCalendar` daily (see Risk areas / poll-interval justification below) (FR-5/FR-13). Deploy
-  host (desktop vs. vmhost.example.internal) is a pure load/capacity decision — there is no proxy-colocation
+  host (<deploy-host-a> vs. <deploy-host-b>) is a pure load/capacity decision — there is no proxy-colocation
   requirement now that egress isolation is out of scope (see Risk areas).
 - `config.example.yaml` — `ha_base_url`, `poll interval config key`, `max_login_attempts`,
   `max_consecutive_failures`, entity-id/friendly-name overrides (FR-14). All three numeric config
@@ -286,10 +286,10 @@ could otherwise mask a real parsing bug in the brittle reverse-engineered upstre
    account inherits their IP-reputation risk; (b) the planned rate-limiting can't actually pace the
    upstream library's internal HTTP calls anyway (see Risk area 5), so egress isolation wasn't
    pairing with a real per-call pacing story in the first place; (c) reusing the shared
-   `gluetun-scraper` container by changing its `ports:` block would recreate the container, which
-   has a documented history (a comment in `internal-infra`'s own compose file) of silently breaking
-   existing `network_mode: container:gluetun-scraper` attachments — currently used by
-   internal-monitor-app's scraper/poshmark services (desktop) and arr-stack's Shelfarr (vmhost.example.internal) — a
+   the shared VPN-egress container by changing its `ports:` block would recreate the container,
+   which has a documented history (a comment in the shared internal-infra compose file) of silently
+   breaking existing container-network attachments — currently used by other unrelated services
+   on <deploy-host-a> and <deploy-host-b> — a
    real, avoidable blast-radius risk to production services for a mitigation that's the wrong shape
    for this target anyway. The poll job authenticates directly over the deploy host's normal network
    path.
